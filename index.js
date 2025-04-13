@@ -1,53 +1,54 @@
 import chalk from 'chalk';
-// Import necessary Keypair class from Sui SDK
+// Import necessary classes from Sui SDK and bip39
 import { Ed25519Keypair } from '@mysten/sui.js/keypairs/ed25519';
+import { generateMnemonic } from 'bip39'; // Import bip39 for mnemonic generation
 import { appendFileSync } from 'fs';
 import moment from 'moment';
 import readlineSync from 'readline-sync';
-import { Buffer } from 'buffer'; // Needed for Base64 encoding
-import { banner } from './banner.js';
+import { Buffer } from 'buffer';
+import { banner } from './banner.js'; // Assuming banner.js exists
 
 // --- Configuration ---
 const WALLET_FILE = './sui_wallets_output.txt'; // Output filename
-// Adjust width - Base64 keys are shorter than Base58, but mnemonics are long
-const BOX_WIDTH = 110;
+const BOX_WIDTH = 110; // Adjust if needed
 
 // --- Helper Functions ---
 
 /**
  * Creates a new random Sui Ed25519 keypair and extracts details.
+ * Generates mnemonic first, then derives the keypair.
  * @returns {{publicKey: string, privateKey: string, mnemonic: string}} Wallet details.
  * publicKey is the Sui Address.
  * privateKey is the Base64 encoded secret key bytes.
  */
 function generateNewSuiWallet() {
-    // Generate a new Ed25519 keypair (Sui's default)
-    const keypair = Ed25519Keypair.generate();
+    try {
+        // 1. Generate a new mnemonic phrase
+        const mnemonicPhrase = generateMnemonic();
 
-    // Get the Sui address (derived from the public key)
-    const publicKey = keypair.getPublicKey().toSuiAddress();
+        // 2. Derive the Ed25519 keypair from the mnemonic
+        // Using the default derivation path for Sui (m/44'/784'/0'/0'/0')
+        const keypair = Ed25519Keypair.deriveKeypair(mnemonicPhrase);
 
-    // Export the keypair to get the mnemonic
-    // Note: Sui's export format includes the key scheme
-    const exported = keypair.export(); // { keypair: string, mnemonic: string } format not standard? Let's try getting mnemonic differently
-    // Correction: The Ed25519Keypair itself should have the mnemonic derivation if generated correctly
-    // Let's try generating *from* a mnemonic derived from random entropy
-    const mnemonic = Ed25519Keypair.generate().getSecretKey(); // Let's stick to the method that provides mnemonic directly
-    // Re-Correction: Let's try the documented way to get mnemonic from a new keypair
+        // 3. Get the Sui address (derived from the public key)
+        const suiAddress = keypair.getPublicKey().toSuiAddress();
 
-    const newKeypair = Ed25519Keypair.generate();
-    const suiAddress = newKeypair.getPublicKey().toSuiAddress();
-    const secretKeyBytes = newKeypair.getSecretKey(); // Get the raw secret bytes (Uint8Array)
-    const mnemonicPhrase = newKeypair.export().mnemonic; // <-- This should work based on typical SDK patterns
+        // 4. Get the raw secret key bytes
+        const secretKeyBytes = keypair.getSecretKey();
 
-    // Encode the raw secret key bytes to Base64 string for backup/storage
-    const privateKeyBase64 = Buffer.from(secretKeyBytes).toString('base64');
+        // 5. Encode the raw secret key bytes to Base64 string
+        const privateKeyBase64 = Buffer.from(secretKeyBytes).toString('base64');
 
-    return {
-        publicKey: suiAddress,
-        privateKey: privateKeyBase64, // Base64 encoded secret key
-        mnemonic: mnemonicPhrase,       // The recovery phrase
-    };
+        return {
+            publicKey: suiAddress,
+            privateKey: privateKeyBase64, // Base64 encoded secret key
+            mnemonic: mnemonicPhrase,     // The recovery phrase
+        };
+    } catch (error) {
+        console.error(chalk.red('Error during keypair generation:'), error);
+        // Return null or throw error to indicate failure
+        return null;
+    }
 }
 
 
@@ -63,24 +64,33 @@ function displayWalletInfoBox(walletData, walletNumber) {
 
     const formatLine = (label, value, color = chalk.white) => {
         const prefix = `│ ${label}: `;
-        const maxContentLength = BOX_WIDTH - 4;
-        const availableValueWidth = maxContentLength - prefix.length + 2;
-        let displayValue = value;
+        const maxContentLength = BOX_WIDTH - 4; // Account for borders and spaces
+        const availableValueWidth = maxContentLength - (label.length + 2); // Width available for the value itself
+
+        // Handle potential undefined/null values gracefully before accessing length
+        let displayValue = (typeof value === 'string' || typeof value === 'number') ? String(value) : 'ERROR: MISSING VALUE';
+
+        // Truncate if necessary (less likely with adjusted width calculation)
         if (displayValue.length > availableValueWidth) {
             displayValue = displayValue.substring(0, availableValueWidth - 3) + '...';
         }
+
         const lineContent = prefix + displayValue;
-        const paddingCount = Math.max(0, BOX_WIDTH - lineContent.length - 1);
+        // Calculate padding based on the actual length of the displayed content
+        const paddingCount = Math.max(0, BOX_WIDTH - (lineContent.length - prefix.length + label.length + 4)); // Adjust padding calculation
         const padding = ' '.repeat(paddingCount);
-        return color(lineContent + padding + '│');
+
+        return color(`│ ${label}: ${displayValue}` + padding + ' │'); // Reconstruct line
     };
+
 
     console.log(chalk.cyan(topBorder));
     console.log(formatLine(`Wallet #${walletNumber}`, `(${moment().format('YYYY-MM-DD HH:mm:ss')})`, chalk.cyan.bold));
     console.log(chalk.cyan(separator));
+    // Ensure labels have consistent padding for alignment
     console.log(formatLine('Sui Address        ', walletData.publicKey, chalk.green));
-    console.log(formatLine('Private Key (B64)  ', walletData.privateKey, chalk.red));
-    console.log(formatLine('Mnemonic Phrase    ', walletData.mnemonic, chalk.magenta));
+    console.log(formatLine('Private Key (B64) ', walletData.privateKey, chalk.red));
+    console.log(formatLine('Mnemonic Phrase   ', walletData.mnemonic, chalk.magenta));
     console.log(chalk.cyan(bottomBorder));
     console.log('');
 }
@@ -102,12 +112,12 @@ function saveWalletToFile(walletData) {
 // --- Main Execution Logic (Async IIFE) ---
 (async () => {
     // 1. Display Banner
-    console.log(banner);
+    console.log(banner); // Make sure banner.js provides the 'banner' export
 
     try {
         // 2. Get User Input
         const numberOfWalletsInput = readlineSync.question(
-            chalk.yellow('Number of Sui wallets to generate: ') // Sui-specific prompt
+            chalk.yellow('Number of Sui wallets to generate: ')
         );
         const requestedCount = parseInt(numberOfWalletsInput, 10);
 
@@ -119,36 +129,42 @@ function saveWalletToFile(walletData) {
         console.log(chalk.cyan(`\nGenerating ${requestedCount} Sui wallet(s)...`));
 
         // 3. Generate Wallets in a Loop
+        let successCount = 0;
         for (let i = 1; i <= requestedCount; i++) {
-            const newWallet = generateNewSuiWallet();
+            const newWallet = generateNewSuiWallet(); // Use updated function
 
-            if (newWallet && newWallet.publicKey) {
+            if (newWallet && newWallet.publicKey && newWallet.privateKey && newWallet.mnemonic) {
                 displayWalletInfoBox(newWallet, i);
                 saveWalletToFile(newWallet);
+                successCount++;
             } else {
-                // Added more specific error logging if generation fails
-                console.log(chalk.red(`[${moment().format('HH:mm:ss')}] ERROR: Failed to generate Sui wallet #${i}. Check dependencies and SDK methods.`));
+                console.log(chalk.red(`[${moment().format('HH:mm:ss')}] ERROR: Failed to generate Sui wallet #${i}. Check console for details.`));
+                // Optional: Stop execution if one fails, or continue
+                // return;
             }
         }
 
-        // 4. Final Confirmation Message (Updated for Sui)
-        console.log(
-            chalk.greenBright(
-                `\n✅ Success! ${requestedCount} Sui wallet(s) generated.`
-            )
-        );
-        console.log(
-            chalk.green(
-                `Wallet details (Sui Address, PrivateKey Base64, Mnemonic) saved to ${chalk.bold(WALLET_FILE)}.`
-            )
-        );
-        console.log(chalk.yellow.bold("\n⚠️ IMPORTANT: Secure BOTH your Mnemonic Phrase and your Base64 Private Key."))
-        console.log(chalk.yellow.bold("   The Mnemonic Phrase is essential for recovery in most Sui wallets."))
-        console.log(chalk.yellow.bold("   Treat these credentials as extremely sensitive!"))
+        // 4. Final Confirmation Message
+        if (successCount > 0) {
+             console.log(
+                chalk.greenBright(
+                    `\n✅ Success! ${successCount} Sui wallet(s) generated.`
+                )
+            );
+            console.log(
+                chalk.green(
+                    `Wallet details (Sui Address, PrivateKey Base64, Mnemonic) saved to ${chalk.bold(WALLET_FILE)}.`
+                )
+            );
+            console.log(chalk.yellow.bold("\n⚠️ IMPORTANT: Secure BOTH your Mnemonic Phrase and your Base64 Private Key."))
+            console.log(chalk.yellow.bold("   The Mnemonic Phrase is essential for recovery in most Sui wallets."))
+            console.log(chalk.yellow.bold("   Treat these credentials as extremely sensitive! Do NOT share them!"))
+        } else {
+             console.log(chalk.red(`\n❌ Failed to generate any wallets. Please check errors above.`));
+        }
 
     } catch (error) {
-        console.error(chalk.red('\n❌ An unexpected error occurred during wallet generation:'));
-        // Log more details if available from the Sui SDK error
+        console.error(chalk.red('\n❌ An unexpected error occurred during script execution:'));
         console.error(chalk.red(error.message || error));
          if (error.stack) {
              console.error(chalk.gray(error.stack));

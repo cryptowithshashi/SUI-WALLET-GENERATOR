@@ -39,7 +39,7 @@ Clone Repository
 ```
 
 ```bash
-    cd SOLANA-WALLET-GENERATOR
+    cd SUI-WALLET-GENERATOR
 ```
 
 Install Packages
